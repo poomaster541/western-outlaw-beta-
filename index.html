@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WESTERN OUTLAW</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#17120e;color:#f5dfb0;font-family:Georgia,serif;overflow:hidden}
+canvas{display:block;width:100vw;height:100vh;cursor:crosshair}
+#hud{position:fixed;top:12px;left:12px;right:12px;display:flex;gap:12px;flex-wrap:wrap;pointer-events:none}
+.panel{background:#24180fdd;border:2px solid #9b6936;padding:9px 13px;border-radius:5px;box-shadow:0 3px 12px #0008}
+.bar{width:130px;height:10px;background:#38251b;margin-top:5px;border:1px solid #a08052}
+.fill{height:100%;width:100%;background:#b63c2d}
+#difficulty{width:150px;background:#38251b;height:12px;margin-top:5px}
+#difficultyFill{height:100%;width:5%;background:#6ab65c}
+#shop{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(420px,92vw);background:#28190f;border:4px solid #b1844e;padding:22px;text-align:center;box-shadow:0 0 0 100vmax #0009;z-index:4}
+#shop h2{font-size:30px;margin:0 0 8px}
+.item{display:flex;justify-content:space-between;align-items:center;border-top:1px solid #75502f;padding:12px 0;gap:10px}
+button{background:#98602e;color:#fff1cc;border:2px solid #d0a46a;padding:9px 13px;font-weight:bold;cursor:pointer;font-family:Georgia}
+button:hover{background:#c17a36}
+#close{margin-top:12px}
+#message{position:fixed;bottom:65px;left:50%;transform:translateX(-50%);background:#21150ddd;padding:12px 20px;border:1px solid #b1844e;text-align:center;pointer-events:none}
+#help{position:fixed;bottom:10px;left:12px;font-size:13px;color:#e2c49a;text-shadow:1px 2px #000}
+#start{position:fixed;inset:0;background:#1b120b;display:flex;align-items:center;justify-content:center;text-align:center;z-index:5}
+#start div{max-width:550px;padding:25px}
+#start h1{font-size:clamp(38px,8vw,70px);color:#e2b16c;text-shadow:4px 5px #522b16;margin:0}
+#start p{line-height:1.7;color:#dfc49d}
+#start button{font-size:20px;padding:14px 30px}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+ <div class="panel">HEALTH <div class="bar"><div id="healthFill" class="fill"></div></div><span id="health">100</span></div>
+ <div class="panel">AMMO <b id="ammo">6</b> / 6</div>
+ <div class="panel">CASH <b>$<span id="cash">50</span></b></div>
+ <div class="panel">WAVE <b id="wave">1</b></div>
+ <div class="panel">DIFFICULTY <b id="difficultyText">EASY</b><div id="difficulty"><div id="difficultyFill"></div></div></div>
+</div>
+
+<div id="message">Find the bandits. Survive the town.</div>
+<div id="help">WASD: Move | Mouse: Aim | Click: Shoot | R: Reload | SPACE: Dodge | E: Enter shop</div>
+
+<div id="shop">
+ <h2 id="shopTitle">GENERAL STORE</h2>
+ <p>Spend your hard-earned cash.</p>
+ <div class="item"><span>Health tonic (+45 HP)<br>$25</span><button onclick="buy('health')">BUY</button></div>
+ <div class="item"><span>Ammo refill (+6 bullets)<br>$15</span><button onclick="buy('ammo')">BUY</button></div>
+ <div class="item"><span>Hardened bullets (+10 damage)<br>$50</span><button onclick="buy('damage')">BUY</button></div>
+ <button id="close" onclick="closeShop()">LEAVE SHOP</button>
+</div>
+
+<div id="start">
+ <div>
+ <h1>WESTERN OUTLAW</h1>
+ <p>A dusty town. A bounty on your head. Bandits are closing in.<br>
+Find supplies, visit the shops, and survive as many waves as possible.</p>
+ <button onclick="begin()">RIDE INTO TOWN</button>
+ <p>WASD to move · Mouse to aim · Click to shoot</p>
+ </div>
+</div>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+let W,H;
+function resize(){W=canvas.width=innerWidth;H=canvas.height=innerHeight}
+addEventListener("resize",resize);resize();
+
+const world={w:1900,h:1400};
+const player={x:950,y:700,hp:100,ammo:6,cash:50,speed:230,damage:25,angle:0,lastShot:0,lastDamage:0,dodge:0};
+let enemies=[],bullets=[],enemyBullets=[],particles=[],keys={},mouse={x:0,y:0};
+let wave=1,kills=0,playing=false,shopOpen=false,currentShop=null,last=0,spawnTimer=0;
+const buildings=[
+ {x:180,y:150,w:390,h:250,name:"SALOON",type:"saloon"},
+ {x:1320,y:150,w:390,h:250,name:"SHERIFF",type:"sheriff"},
+ {x:180,y:1000,w:360,h:230,name:"GENERAL STORE",type:"store"},
+ {x:1360,y:1000,w:360,h:230,name:"STABLE",type:"stable"}
+];
+const rand=(a,b)=>a+Math.random()*(b-a);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const msg=t=>document.getElementById("message").textContent=t;
+
+function begin(){
+ document.getElementById("start").style.display="none";
+ playing=true;
+ last=performance.now();
+ requestAnimationFrame(loop);
+ spawnWave();
+}
+
+function spawnWave(){
+ for(let i=0;i<3+wave*2;i++){
+  let side=Math.floor(Math.random()*4),x,y;
+  if(side===0){x=rand(30,world.w-30);y=30}
+  if(side===1){x=rand(30,world.w-30);y=world.h-30}
+  if(side===2){x=30;y=rand(30,world.h-30)}
+  if(side===3){x=world.w-30;y=rand(30,world.h-30)}
+  enemies.push({x,y,hp:50+wave*8,speed:65+wave*3,shot:rand(0.5,2),angle:0});
+ }
+ document.getElementById("wave").textContent=wave;
+}
+
+function blocked(x,y,r=15){
+ if(x<r||y<r||x>world.w-r||y>world.h-r)return true;
+ return buildings.some(b=>x+r>b.x&&x-r<b.x+b.w&&y+r>b.y&&y-r<b.y+b.h);
+}
+
+function movePlayer(dx,dy,dt){
+ const len=Math.hypot(dx,dy)||1;
+ dx=dx/len;dy=dy/len;
+ const speed=player.speed*(player.dodge>0?2.8:1);
+ if(!blocked(player.x+dx*speed*dt,player.y))player.x+=dx*speed*dt;
+ if(!blocked(player.x,player.y+dy*speed*dt))player.y+=dy*speed*dt;
+}
+
+function shoot(){
+ if(!playing||shopOpen||player.ammo<=0)return;
+ const now=performance.now();
+ if(now-player.lastShot<260)return;
+ player.lastShot=now;
+ player.ammo--;
+ const x=player.x+Math.cos(player.angle)*24;
+ const y=player.y+Math.sin(player.angle)*24;
+ bullets.push({x,y,vx:Math.cos(player.angle)*720,vy:Math.sin(player.angle)*720,life:1.2,damage:player.damage});
+ updateHud();
+}
+
+function reload(){
+ if(player.ammo<6){player.ammo=6;updateHud();msg("Reloaded!");}
+}
+
+function updateHud(){
+ document.getElementById("health").textContent=Math.ceil(player.hp);
+ document.getElementById("healthFill").style.width=player.hp+"%";
+ document.getElementById("ammo").textContent=player.ammo;
+ document.getElementById("cash").textContent=player.cash;
+ const difficulty=clamp((wave-1)*12+enemies.length*2,0,100);
+ document.getElementById("difficultyFill").style.width=difficulty+"%";
+ document.getElementById("difficultyText").textContent=
+ difficulty<25?"EASY":difficulty<50?"MEDIUM":difficulty<75?"HARD":"DEADLY";
+ document.getElementById("difficultyFill").style.background=
+ difficulty<25?"#6ab65c":difficulty<50?"#d3b44a":difficulty<75?"#d47b32":"#c63832";
+}
+
+function nearestShop(){
+ let best=null,bd=Infinity;
+ for(const b of buildings){
+  const d=dist(player,{x:b.x+b.w/2,y:b.y+b.h/2});
+  if(d<bd){bd=d;best=b;}
+ }
+ return bd<115?best:null;
+}
+
+function enterShop(){
+ if(!playing||shopOpen)return;
+ const b=nearestShop();
+ if(!b){msg("Move closer to a shop and press E.");return;}
+ currentShop=b;
+ shopOpen=true;
+ document.getElementById("shopTitle").textContent=b.name;
+ document.getElementById("shop").style.display="block";
+ msg("Shopping...");
+}
+
+function closeShop(){
+ shopOpen=false;
+ document.getElementById("shop").style.display="none";
+ msg("Back into the street.");
+}
+
+function buy(item){
+ if(!shopOpen)return;
+ const prices={health:25,ammo:15,damage:50};
+ const price=prices[item];
+ if(player.cash<price){msg("Not enough cash!");return;}
+ if(item==="health"&&player.hp>=100){msg("Your health is already full.");return;}
+ player.cash-=price;
+ if(item==="health")player.hp=Math.min(100,player.hp+45);
+ if(item==="ammo")player.ammo=6;
+ if(item==="damage")player.damage+=10;
+ updateHud();
+ msg("Purchase complete!");
+}
+
+function update(dt){
+ if(!playing||shopOpen)return;
+ player.dodge=Math.max(0,player.dodge-dt);
+ let dx=(keys.d?1:0)-(keys.a?1:0);
+ let dy=(keys.s?1:0)-(keys.w?1:0);
+ if(dx||dy)movePlayer(dx,dy,dt);
+
+ const cam={x:clamp(player.x-W/2,0,world.w-W),y:clamp(player.y-H/2,0,world.h-H)};
+ const mx=mouse.x+cam.x,my=mouse.y+cam.y;
+ player.angle=Math.atan2(my-player.y,mx-player.x);
+
+ for(const e of enemies){
+  const d=dist(e,player);
+  e.angle=Math.atan2(player.y-e.y,player.x-e.x);
+  if(d>40){
+   const vx=Math.cos(e.angle)*e.speed*dt;
+   const vy=Math.sin(e.angle)*e.speed*dt;
+   if(!blocked(e.x+vx,e.y))e.x+=vx;
+   if(!blocked(e.x,e.y+vy))e.y+=vy;
+  }
+  e.shot-=dt;
+  if(e.shot<=0&&d<650){
+   e.shot=rand(1.2,2.2)-Math.min(wave*.035,.7);
+   enemyBullets.push({x:e.x,y:e.y,vx:Math.cos(e.angle)*280,vy:Math.sin(e.angle)*280,life:3});
+  }
+ }
+
+ for(const b of bullets){
+  b.x+=b.vx*dt;b.y+=b.vy*dt;b.life-=dt;
+  for(const e of enemies){
+   if(e.hp>0&&Math.hypot(e.x-b.x,e.y-b.y)<22){
+    e.hp-=b.damage;b.life=0;
+    for(let i=0;i<5;i++)particles.push({x:e.x,y:e.y,vx:rand(-70,70),vy:rand(-70,70),life:.3});
+    if(e.hp<=0){player.cash+=10;kills++;msg("Bandit down! +$10");}
+    break;
+   }
+  }
+ }
+ bullets=bullets.filter(b=>b.life>0);
+
+ for(const b of enemyBullets){
+  b.x+=b.vx*dt;b.y+=b.vy*dt;b.life-=dt;
+  if(Math.hypot(b.x-player.x,b.y-player.y)<19&&player.dodge<=0){
+   if(performance.now()-player.lastDamage>450){
+    player.hp-=10;player.lastDamage=performance.now();
+    msg("You've been hit!");
+   }
+   b.life=0;
+  }
+ }
+ enemyBullets=enemyBullets.filter(b=>b.life>0);
+ enemies=enemies.filter(e=>e.hp>0);
+
+ for(const p of particles){p.x+=p.vx*dt;p.y+=p.vy*dt;p.life-=dt;}
+ particles=particles.filter(p=>p.life>0);
+
+ if(player.hp<=0){
+  player.hp=0;playing=false;
+  msg("YOU DIED — Refresh to try again.");
+  document.getElementById("start").style.display="flex";
+  document.querySelector("#start h1").textContent="YOU DIED";
+  document.querySelector("#start p").innerHTML="You survived "+kills+" bandits.<br>Reached wave "+wave+".";
+  document.querySelector("#start button").textContent="REFRESH TO RESTART";
+  document.querySelector("#start button").onclick=()=>location.reload();
+ }
+ if(enemies.length===0){
+  spawnTimer+=dt;
+  if(spawnTimer>2){
+   wave++;spawnTimer=0;player.cash+=15;
+   msg("Wave "+wave+"! Bonus: $15");
+   spawnWave();
+  }
+ }
+ updateHud();
+}
+
+function drawBuilding(b){
+ ctx.fillStyle="#25170f";
+ ctx.fillRect(b.x+10,b.y+12,b.w,b.h);
+ ctx.fillStyle=b.type==="saloon"?"#75402b":b.type==="sheriff"?"#6b5540":b.type==="store"?"#9b683a":"#805438";
+ ctx.fillRect(b.x,b.y,b.w,b.h);
+ ctx.fillStyle="#42251a";
+ ctx.fillRect(b.x-10,b.y-23,b.w+20,35);
+ ctx.fillStyle="#ad7541";
+ ctx.fillRect(b.x+15,b.y+15,b.w-30,13);
+ ctx.fillStyle="#28180f";
+ ctx.fillRect(b.x+b.w/2-27,b.y+b.h-65,54,65);
+ ctx.fillStyle="#d9ad6d";
+ ctx.font="bold 22px Georgia";
+ ctx.textAlign="center";
+ ctx.fillText(b.name,b.x+b.w/2,b.y+55);
+ ctx.fillStyle="#d6a45e";
+ ctx.font="14px Georgia";
+ ctx.fillText("PRESS E",b.x+b.w/2,b.y+80);
+ for(let i=0;i<3;i++){
+  ctx.fillStyle="#3c2417";
+  ctx.fillRect(b.x+35+i*90,b.y+105,50,40);
+  ctx.fillStyle="#d3a15d";
+  ctx.fillRect(b.x+39+i*90,b.y+109,42,32);
+ }
+}
+
+function drawPerson(x,y,color,angle,isEnemy=false){
+ ctx.save();ctx.translate(x,y);
+ ctx.fillStyle="#0006";ctx.beginPath();ctx.ellipse(0,12,17,8,0,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle="#302017";ctx.fillRect(-9,0,7,15);ctx.fillRect(3,0,7,15);
+ ctx.fillStyle=color;ctx.fillRect(-12,-15,24,22);
+ ctx.fillStyle="#d5a16d";ctx.beginPath();ctx.arc(0,-22,10,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle=isEnemy?"#342019":"#4a2815";
+ ctx.fillRect(-15,-30,30,5);ctx.fillRect(-9,-38,18,9);
+ ctx.rotate(angle);
+ ctx.fillStyle="#352018";ctx.fillRect(7,-12,23,6);
+ ctx.restore();
+}
+
+function render(){
+ ctx.clearRect(0,0,W,H);
+ const camX=clamp(player.x-W/2,0,world.w-W);
+ const camY=clamp(player.y-H/2,0,world.h-H);
+ ctx.save();ctx.translate(-camX,-camY);
+ ctx.fillStyle="#b28a54";ctx.fillRect(0,0,world.w,world.h);
+ for(let i=0;i<700;i++){
+  let x=(i*173)%world.w,y=(i*311)%world.h;
+  ctx.fillStyle=i%2?"#9c7648":"#c09a64";
+  ctx.globalAlpha=.25;ctx.fillRect(x,y,rand(2,7),rand(2,5));
+ }
+ ctx.globalAlpha=1;
+ ctx.fillStyle="#c29b68";ctx.fillRect(650,0,550,world.h);
+ ctx.fillStyle="#d0a975";ctx.fillRect(0,625,world.w,180);
+ for(let i=0;i<world.w;i+=80){
+  ctx.fillStyle="#98744d";ctx.fillRect(i,685,35,2);
+ }
+ buildings.forEach(drawBuilding);
+
+ for(const e of enemies)drawPerson(e.x,e.y,"#653c2d",e.angle,true);
+ drawPerson(player.x,player.y,"#31503b",player.angle);
+
+ ctx.fillStyle="#f3d4a1";
+ for(const b of bullets){ctx.beginPath();ctx.arc(b.x,b.y,4,0,7);ctx.fill();}
+ ctx.fillStyle="#d74332";
+ for(const b of enemyBullets){ctx.beginPath();ctx.arc(b.x,b.y,5,0,7);ctx.fill();}
+ for(const p of particles){
+  ctx.globalAlpha=Math.max(0,p.life/.3);
+  ctx.fillStyle="#b13e27";ctx.fillRect(p.x,p.y,4,4);
+ }
+ ctx.globalAlpha=1;
+
+ const near=nearestShop();
+ if(near&&!shopOpen){
+  ctx.fillStyle="#25170fdd";ctx.fillRect(player.x-110,player.y-75,220,28);
+  ctx.fillStyle="#fff0c9";ctx.font="15px Georgia";ctx.textAlign="center";
+  ctx.fillText("E - ENTER "+near.name,player.x,player.y-56);
+ }
+ ctx.restore();
+}
+
+function loop(t){
+ if(!playing)return;
+ const dt=Math.min((t-last)/1000,.04);last=t;
+ update(dt);render();
+ requestAnimationFrame(loop);
+}
+
+addEventListener("keydown",e=>{
+ const k=e.key.toLowerCase();
+ keys[k]=true;
+ if(k==="r")reload();
+ if(k==="e"){if(shopOpen)closeShop();else enterShop();}
+ if(k===" "){e.preventDefault();player.dodge=.25;}
+});
+addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+canvas.addEventListener("mousemove",e=>{mouse.x=e.clientX;mouse.y=e.clientY;});
+canvas.addEventListener("mousedown",e=>{if(e.button===0)shoot();});
+canvas.addEventListener("contextmenu",e=>e.preventDefault());
+
+render();
+</script>
+</body>
+</html>
